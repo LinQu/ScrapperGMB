@@ -525,7 +525,8 @@ class GoogleMapsScraper:
 
         """ AMBIL NO TELEPON TEMPAT """
         try:
-            place['notelp'] = response.find('button', attrs={'data-item-id': lambda x: x and x.startswith('phone:tel:')})['data-item-id'].replace('phone:tel:', '')
+            num = response.find('button', attrs={'data-item-id': lambda x: x and x.startswith('phone:tel:')})['data-item-id'].replace('phone:tel:', '')
+            place["notelp"] = f"{num[:4]}-{num[4:8]}-{num[8:]}"
         except:
             place['notelp'] = None
 
