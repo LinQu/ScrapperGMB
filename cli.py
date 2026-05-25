@@ -25,7 +25,7 @@ def print_header():
     print("╔═══════════════════════════════════════════╗")
     print("║     🗺️  Google Maps Scraper v2.1           ║")
     print("║     Extract Reviews & Place Data          ║")
-    print("║     by                                    ║")
+    print("║     by Asira                               ║")
     print("╚═══════════════════════════════════════════╝")
     print(f"{Colors.END}\n")
 
@@ -66,7 +66,7 @@ Examples:
 
     parser.add_argument(
         "--mode",
-        choices=["summary", "reviews"],
+        choices=["summary", "reviews", "rekapv2"],
         help="Scraping mode: 'summary' (place info) atau 'reviews' (ulasan)"
     )
 
@@ -166,6 +166,8 @@ def handle_scraping(args):
                 )
 
                 if mode == ScrapeMode.SUMMARY:
+                    results.append(data)
+                elif mode == ScrapeMode.REKAPV2:
                     results.append(data)
                 else:
                     results.extend(data)
