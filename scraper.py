@@ -8,7 +8,9 @@ import traceback
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from urllib.parse import unquote, urlparse, parse_qs
+from numpy import place
 import requests
+from numpy import place
 
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -19,6 +21,7 @@ class ScrapeMode(Enum):
     SUMMARY = "summary"
     REVIEWS = "reviews"
     CONVERT = "convert"
+    REKAPV2 = "rekapv2"
 
 class LanguageDetector:
     """Deteksi bahasa Google Maps (ID/EN)"""
@@ -166,8 +169,10 @@ class GoogleMapsScraper:
         df_places = df_places[['search_point_url', 'href', 'name']]
         df_places.to_csv('output/places_wax.csv', index=False)
 
-    def get_reviews(self, offset: int) -> List[Dict[str, Any]]:
+    def get_reviews(self, offset: int, cab: str) -> List[Dict[str, Any]]:
         """Get reviews from current page"""
+        self.page.reload()
+        self.__click_on_cookie_agreement()
         # Scroll to load reviews
         self.__scroll()
 
@@ -184,7 +189,7 @@ class GoogleMapsScraper:
         
         for index, review in enumerate(rblock):
             if index >= offset:
-                r = self.__parse(review)
+                r = self.__parse(review, cab)
                 parsed_reviews.append(r)
                 #print(r)
 
@@ -200,10 +205,17 @@ class GoogleMapsScraper:
         resp = BeautifulSoup(self.page.content(), 'html.parser')
         place_data = self.__parse_place(resp, url, cab)
         return place_data
+    
+    
 
-    def __parse(self, review) -> Dict[str, Any]:
+    def __parse(self, review, cab) -> Dict[str, Any]:
         """Parse individual review"""
         item = {}
+
+        try:
+            kodecab = cab
+        except:
+            kodecab = None
 
         try:
             id_review = review['data-review-id']
@@ -257,6 +269,7 @@ class GoogleMapsScraper:
         except:
             item["name"] = None
 
+        item['kode_cabang'] = kodecab
         item['id_review'] = id_review
         item['caption'] = review_text
         item['relative_date'] = relative_date
@@ -443,6 +456,121 @@ class GoogleMapsScraper:
 
         return place
     
+    def get_rekap_info(self, url: str, cab: str) -> Dict[str, Any]:
+        """ AMBIL INFORMASI PLACE SEPERTI LINK GAMBAR, LINK MAP, LINK WEBSITE, DLL (REKAP V2) """
+        self.page.goto(url)
+        self.page.reload()
+        self.__click_on_cookie_agreement()
+        time.sleep(2)
+
+        resp = BeautifulSoup(self.page.content(), 'html.parser')
+        place_data = self.__get_info_rekap(resp, url, cab)
+        return place_data
+    
+    def __get_info_rekap(self, response, url: str, cab: str) -> Dict[str, Any]:
+        """Parse place information untuk rekap v2 (gabungan summary + reviews)"""
+        place = {}
+        try:
+            place["kode_cabang"] = cab
+        except:
+            place["kode_cabang"] = None
+
+        try:
+            raw_title = response.find("title").text.strip()
+
+            name = re.sub(r"\s*-\s*Google Maps\s*$", "", raw_title, flags=re.IGNORECASE)
+
+            name = re.sub(r"[^a-zA-Z0-9\s]", "", name)
+
+            place["name"] = name.strip()
+
+        except:
+            place["name"] = None
+
+        try:
+            """ AMBIL EMAIL TEMPAT (JIKA ADA) """
+            place["email"] = response.find('a', jsaction='pane.rating.email').text.strip()
+        except:
+            place["email"] = None
+
+        try:
+            place["link_tree"] = parse_qs(urlparse(response.find('a', attrs={'data-item-id': 'services'})['href']).query).get('q', [None])[0]
+        except:
+            place["link_tree"] = None
+
+        """ AMBIL JAM OPRASIONAL (FORMAT LEBIH RAPIH) """
+        try:
+            row = response.find_all('tr', class_='y0skZc')[datetime.now().weekday()]
+            jam = row.find('td', class_='mxowUb')['aria-label'].split(',')[0]
+
+            start, end = jam.split(' hingga ')
+
+            place['jamopr'] = f"{datetime.strptime(start,'%H.%M').strftime('%-I.%M %p').lower()}-{datetime.strptime(end,'%H.%M').strftime('%-I.%M %p').lower()}"
+
+        except:
+            place['jamopr'] = None
+
+        """ AMBIL TITIK LOKASI LINK GMAPS dan  """
+        try:
+            gen_cid = re.search(r'0x[a-f0-9]+:0x([a-f0-9]+)', url)
+            if gen_cid:
+                place['titiklokasi'] = "https://www.google.com/maps?cid=" + str(int(gen_cid.group(1), 16))
+            else:
+                place['titiklokasi'] = url
+            
+            
+            
+        except:
+            place['titiklokasi'] = None
+
+        """ AMBIL NO TELEPON TEMPAT """
+        try:
+            place['notelp'] = response.find('button', attrs={'data-item-id': lambda x: x and x.startswith('phone:tel:')})['data-item-id'].replace('phone:tel:', '')
+        except:
+            place['notelp'] = None
+
+        """ AMBIL LINK WEBSITE TEMPAT """
+        try:
+            place['situsweb'] = parse_qs(urlparse(response.find('a', attrs={'data-item-id': 'authority'})['href']).query).get('q', [None])[0]
+        except:
+            place['situsweb'] = None
+
+        try:
+
+            place["link"] = None
+        except:
+            place["link"] = None
+
+        """ AMBIL TOTAL ULASAN TEMPAT """
+        try:
+            place["totulasan"] = int(re.search(r'[\d\.]+', response.find('button', attrs={'jsaction':'pane.wfvdle14.reviewChart.moreReviews'}).text).group().replace('.', ''))
+        except:
+            place["totulasan"] = None
+
+        try:
+            place["totbalasan"] = response.find('span', jsaction='pane.wfvdle14.reviewChart.moreReviews').text.strip()
+        except:
+            place["totbalasan"] = None
+
+        """ AMBIL RATING TEMPAT """
+        try:
+            place["rating"] = float(response.find('div', class_='fontDisplayLarge').text.strip().replace(',', '.'))
+        except:
+            place["rating"] = None
+
+        """ AMBIL LINK GAMBAR TEMPAT """
+        try:
+            place["image_link"] = response.select_one('button[jsaction*="heroHeaderImage"] img')['src']
+        except:
+            place["image_link"] = None
+
+        """ BUAT FIELD tglUpd tgl sekarang format dd-mm-yyyy"""
+        place["tglUpd"] = datetime.now().strftime("%d-%m-%Y")
+    
+        """ BUAT FIELD jamUpd tgl sekarang """
+        place["jamUpd"] = datetime.now().strftime("%H:%M:%S")
+        return place
+    
     def scrape(
         self,
         url: str,
@@ -469,12 +597,16 @@ class GoogleMapsScraper:
         elif mode == ScrapeMode.REVIEWS:
             self.page.goto(processed_url)
             self.page.reload()
-            print(f"URL after reload: {self.page.url}")
             self.__click_on_cookie_agreement()
             # Click review button jika belum di reviews section
             self.__click_reviews_tab()
-            reviews = self.get_reviews(review_offset)
+            reviews = self.get_reviews(review_offset, cab)
             return self._filter_review_fields(reviews, fields)
+
+        elif mode == ScrapeMode.REKAPV2:
+            data = self.get_rekap_info(processed_url, cab)
+            print(f"Cabang: {cab}")
+            return self._filter_fields(data, fields)
 
         else:
             raise ValueError(f"Mode tidak valid: {mode}")
